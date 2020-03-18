@@ -1,10 +1,103 @@
-language: R
-sudo: false
+language: r
+warnings_are_errors: true
 cache: packages
-use_bioc: yes
-bioc_required: yes
-warnings_are_errors: yes
-r_check_args: --as-cran
+bioc_required: true
+cran: http://cran.rstudio.com
+dist: trusty
+addons:
+  apt:
+    packages:
+    - libcurl4-openssl-dev
+    - libxml2-dev
+    - libfftw3-dev
+    - libgsl0-dev
+    - mesa-common-dev
+    - libglu1-mesa-dev
+    - devscripts
+os:
+- linux
+- osx
+osx_image: xcode9.4
+services: xvfb
+r:
+- 3.3
+- 3.4
+- 3.5
+- release
+- devel
+jobs:
+  allow_failures:
+  - r: devel
+env:
+  global:
+  - RGL_USE_NULL=TRUE
+  - PROJECT_NAME=neuroconductor
+  - DISPLAY=:99.0
+  - R_REMOTES_NO_ERRORS_FROM_WARNINGS=true
+  - _R_CHECK_FORCE_SUGGESTS_=false
+  - CACHE_NAME="${TRAVIS_OS_NAME}-R-${TRAVIS_R_VERSION}"
+r_check_args: "--as-cran --install-args=--build"
+before_install:
+- if [ "$TRAVIS_DIST" = "trusty" ]; then sudo apt-get -y install libgsl0ldbl ; fi
+- ulimit -n 2048
+- export PROJ_DIR=`basename $PWD`
+- fname=travis_helpers.sh
+- wget -O ${fname} http://bit.ly/travis_helpers
+- cat ${fname}; source ${fname}; rm ${fname}
+- cat DESCRIPTION
+- codename=`linux_codename`;
+- start_xvfb ;
+- export rver=`r_version`; echo $rver ;
+- if [ "$TRAVIS_OS_NAME" = "osx" ]; then no_open_mp ; brew install -v freetype ; fi
+- jags_install || true;
+- if `need_v8`; then v8_install || true; fi
+- dcmtk_install || true;
+- gsl_install 2.1 || true ;
+- export cmake_version="3.11"
+- cmake --version
+- x=`cmake_setup`; echo "${x}"; eval ${x};
+- cmake --version
+- remove_neuroc_packages
+- cat DESCRIPTION
+- install_remotes_no_dep
+- cat DESCRIPTION
+- export PACKAGE_NAME=`package_name`
+- echo "Package Name is $PACKAGE_NAME"
+- if [[ "${PACKAGE_NAME}" == "waveslim" ]]; then fftw_install ; fi
+- if [[ "${PACKAGE_NAME}" == "dti" || "${PACKAGE_NAME}" == "qMRI" ]]; then gsl_install
+  ; fi
+- if [[ "${PACKAGE_NAME}" == "ROpenCVLite" || "${PACKAGE_NAME}" == "Rvision" || "${PACKAGE_NAME}"
+  == "rtapas" ]]; then shopt -s expand_aliases ; x=`Rscript -e "cat(Sys.which('R'))"`
+  ; echo "reset R" ; alias R="travis_wait 100 ${x}" ; fi
+- setup_python 3.6 false ;
+- install_python_requirements ;
+- R CMD javareconf ;
+after_success: dump_logs
+after_failure: dump_logs
+before_deploy:
+- if [ "$TRAVIS_OS_NAME" = "osx" ]; then PKG_TARBALL=$(ls -1t *.tgz | head -n 1);
+  PKG_TARBALL_WITH_R=`echo $PKG_TARBALL | sed 's/.tgz/_'"R${rver}"'.tgz/'` ; mv ${PKG_TARBALL}
+  ${PKG_TARBALL_WITH_R} ; echo "Built tarball is ${PKG_TARBALL_WITH_R}" ; fi
+- if [ "$TRAVIS_OS_NAME" = "linux" ]; then PKG_TARBALL=$(ls -1t *.tar.gz | head -n
+  1); PKG_TARBALL_WITH_R=`echo $PKG_TARBALL | sed 's/.tar.gz/_'"R${rver}"'.tar.gz/'`
+  ; mv ${PKG_TARBALL} ${PKG_TARBALL_WITH_R} ; echo "Built tarball is ${PKG_TARBALL_WITH_R}"
+  ; fi
+- if [[ "${TRAVIS_OS_NAME}" = "osx" ]]; then rm -f *.tar.gz; fi
+deploy:
+  provider: releases
+  skip_cleanup: true
+  file_glob: true
+  overwrite: true
+  file: "${PACKAGE_NAME}*.t*gz"
+  on:
+    tags: true
+  token:
+    secure: CUN2dT0XFkf8LnjUqTEtxpkO4RusARmRP/CJUATnR31mNPwFEWOzHQtCUvbRY3ETLs6o4PGMEmD6V6AJFfIsR/vVvT6MGr286HwLrxN+sIFoXr5LgDZW4QG3qmhLXFyxSUwDUwyp3msaH7MVxy91WfvFzf+joCFDUbWddQx89gAe/XNDbR+UvjpJwVUH0pvAo0wpSelXwtE8R0QcR191X6KzyciVfzkKbzexdPStWREXCkxJyfKhlmMuev6sff2ZEg0+JGtjWfRBU8dFFyW+KbrY6rH80QZpTf8PoDrs2/Q3faumlgS9Lsk8MIDutY4DZdlVchb/DtEzquQDnk9vmM05c2pX7VSP5nH1YuSovKWgbcD/ryZxqzkAt6xPdNTiHtaS5fsDIMUisr5rycUEXVcbpfO6oDVdKdtPtlcSOuePzpdD45P+v9W3Kqpy/ROZ6HMFQBVLO/FmdzjptuZa1vibGXYu8vydoCrS2k5+5DzBBMUptBgzh25LmST+C0ODGy4ozNkQ6IIA4gKB6g0wiT92nHSrfVIz3UsOFEYnKkbP4Q6VRNcxmuavpchtcf7d4Wo//2mKRwXYW0XDXk+BvQJUNGMsGIXhOW3J3JYjgJT1aFoJkzQ/nTV7dDgWORWrwOFwj//vJIgrymV8nJudJjbF902i8mdyRTDo4Ts73t0=
+after_deploy:
+- echo "${PROJECT_NAME}" | grep -q "releases"; if [[ $? -eq 0 ]]; then run_coverage="false";
+  else run_coverage=; fi;
+- if [[ "${TRAVIS_OS_NAME}" == "linux" && ${TRAVIS_R_VERSION_STRING} = "release" &&
+  -z "${run_coverage}" ]]; then echo 'covr::coveralls(type = "all", quiet = FALSE)'
+  > neuroc_covr.R ; travis_wait 100 Rscript neuroc_covr.R ; rm neuroc_covr.R ; fi
 
-after_success:
-    - Rscript -e 'covr::coveralls()'
+#neuroc.deps version (SHA): 4c7282f
